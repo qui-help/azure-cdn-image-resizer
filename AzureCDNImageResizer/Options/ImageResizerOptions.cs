@@ -1,38 +1,17 @@
-﻿using System;
-using AzureCDNImageResizer.Models;
+﻿using AzureCDNImageResizer.Models;
 using System.Collections.Generic;
 
 namespace AzureCDNImageResizer.Options
 {
     public class ImageResizerOptions
     {
-        public string SmallSize { get; set; } = "200x200";
+        public const string CertificateSm = "200x200";
+        public const string DefaultSize = "400x400";
 
-        public string MediumSize { get; set; } = "500x500";
-
-        public string HeroSize { get; set; } = "1200x600";
-
-        public IDictionary<string, ImageSize> PredefinedImageSizes
+        public readonly IDictionary<string, ImageSize> PredefinedImageSizes = new Dictionary<string, ImageSize>
         {
-            get
-            {
-                var dic = new Dictionary<string, ImageSize>();
-                if (!string.IsNullOrWhiteSpace(this.SmallSize))
-                {
-                    dic.Add("small", ImageSize.Parse(SmallSize, "small"));
-                }
-                if (!string.IsNullOrWhiteSpace(this.MediumSize))
-                {
-                    dic.Add("medium", ImageSize.Parse(MediumSize, "medium"));
-                }
-                if (!string.IsNullOrWhiteSpace(this.HeroSize))
-                {
-                    dic.Add("hero", ImageSize.Parse(HeroSize, "hero"));
-                }
-
-                return dic;
-            }
-        }
+            { "c_sm", ImageSize.Parse(CertificateSm, "c_sm") },
+            { "d", ImageSize.Parse(DefaultSize, "d") },
+        };
     }
 }
-

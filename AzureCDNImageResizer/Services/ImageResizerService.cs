@@ -34,124 +34,157 @@ namespace AzureCDNImageResizer.Services
         /// <summary>
         /// Resizes an image to specified size and format
         /// </summary>
-        /// <param name="url"></param>
-        /// <param name="size"></param>
-        /// <param name="output"></param>
-        /// <param name="mode"></param>
-        /// <param name="containerKey"></param>
-        /// <param name="isVideo"></param>
-        /// <returns></returns>
-        public async Task<Stream> ResizeAsync(string url, string containerKey, string size, string output, string mode, bool isVideo = false)
+        public async Task<Stream> ResizeAsync(string url, string containerKey, string size, string output, string mode,
+            bool isVideo = false)
         {
-            return await GetResultStreamAsync(url, containerKey, !isVideo ? StringToImageSize(size) : null, output, mode, isVideo);
+            ImageSize? imageSize = isVideo ? null : ParseImageSize(size);
+            return await GetResultStreamAsync(url, containerKey, imageSize, output, mode, isVideo);
         }
 
-
         /// <summary>
-        /// Download the image and pass it to get processed
+        /// Retrieves the blob stream and processes it if resizing is needed
         /// </summary>
-        /// <param name="uri"></param>
-        /// <param name="imageSize"></param>
-        /// <param name="output"></param>
-        /// <param name="mode"></param>
-        /// <param name="containerKey"></param>
-        /// <param name="isVideo"></param>
-        /// <returns></returns>
-        private async Task<Stream> GetResultStreamAsync(string uri, string containerKey, ImageSize? imageSize, string output, string mode, bool isVideo = false)
+        private async Task<Stream> GetResultStreamAsync(string uri, string containerKey, ImageSize? imageSize,
+            string output, string mode, bool isVideo)
         {
-            // Create a BlobServiceClient object which will be used to create a container client
-            var blobServiceClient = new BlobServiceClient(_config.GetConnectionString("AzureStorage"));
-
-            // get the container name            
             try
             {
-                // Create the container and return a container client object 
-                var container = blobServiceClient.GetBlobContainerClient(containerKey);
+                var blobStream = await GetBlobStreamAsync(containerKey, uri);
 
-                // Get a reference to a blob
-                var blobClient = container.GetBlobClient(uri);
-
-                var blobStream = await blobClient.OpenReadAsync(new BlobOpenReadOptions(allowModifications: false));
-
-                if (output == "svg" || isVideo || imageSize is null)
+                if (ShouldSkipResizing(output, isVideo, imageSize))
                 {
                     return blobStream;
                 }
 
-                if (imageSize.Value.Name == ImageSize.OriginalImageSize)
-                {
-                    return blobStream;
-                }
-                
-                return CreateResizedStream(blobStream, imageSize.Value, output, mode);
+                return CreateResizedStream(blobStream, imageSize!.Value, output, mode);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to resize image");
+                _logger.LogError(ex, "Failed to resize image from blob: {Uri} in container: {ContainerKey}", uri,
+                    containerKey);
                 return null;
             }
         }
 
         /// <summary>
-        /// Resizes/Crops image
+        /// Retrieves a stream from Azure Blob Storage
         /// </summary>
-        /// <param name="sourceStream"></param>
-        /// <param name="size"></param>
-        /// <param name="output"></param>
-        /// <param name="mode"></param>
-        /// <returns></returns>
+        private async Task<Stream> GetBlobStreamAsync(string containerKey, string blobUri)
+        {
+            var blobServiceClient = new BlobServiceClient(_config.GetConnectionString("AzureStorage"));
+            var container = blobServiceClient.GetBlobContainerClient(containerKey);
+            var blobClient = container.GetBlobClient(blobUri);
+
+            return await blobClient.OpenReadAsync(new BlobOpenReadOptions(allowModifications: false));
+        }
+
+        /// <summary>
+        /// Determines if image resizing should be skipped
+        /// </summary>
+        private static bool ShouldSkipResizing(string output, bool isVideo, ImageSize? imageSize)
+        {
+            if (isVideo || imageSize is null)
+            {
+                return true;
+            }
+
+            if (output == "svg")
+            {
+                return true;
+            }
+
+            if (imageSize.Value.Name == ImageSize.OriginalImageSize)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Creates a resized image stream using a pipe for async processing
+        /// </summary>
         private Stream CreateResizedStream(Stream sourceStream, ImageSize size, string output, string mode)
         {
             var pipe = new Pipe();
 
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    using var image = await Image.LoadAsync(sourceStream);
-
-                    ApplyResize(image, size, mode);
-
-                    await using (var destinationStream = pipe.Writer.AsStream(true))
-                    {
-                        WriteImage(image, destinationStream, output);
-                        await destinationStream.FlushAsync(CancellationToken.None);
-                    }
-
-                    await pipe.Writer.FlushAsync();
-                    await pipe.Writer.CompleteAsync();
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to process image stream.");
-                    await pipe.Writer.CompleteAsync(ex);
-                }
-                finally
-                {
-                    await sourceStream.DisposeAsync();
-                }
-            });
+            _ = Task.Run(async () => await ProcessImageAsync(sourceStream, size, output, mode, pipe));
 
             return pipe.Reader.AsStream();
         }
 
         /// <summary>
-        /// Figure out if the user passed a standard size or custom size
+        /// Processes the image: loads, resizes, and writes to the pipe
         /// </summary>
-        /// <param name="value"></param>
-        /// <returns></returns>
-        private ImageSize StringToImageSize(string value)
+        private async Task ProcessImageAsync(Stream sourceStream, ImageSize size, string output, string mode, Pipe pipe)
+        {
+            try
+            {
+                using var image = await Image.LoadAsync(sourceStream);
+
+                ApplyResize(image, size, mode);
+
+                await WriteImageToPipeAsync(image, output, pipe);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to process image stream");
+                await pipe.Writer.CompleteAsync(ex);
+            }
+            finally
+            {
+                await sourceStream.DisposeAsync();
+            }
+        }
+
+        /// <summary>
+        /// Writes the processed image to the pipe in the specified format
+        /// </summary>
+        private async Task WriteImageToPipeAsync(Image image, string output, Pipe pipe)
+        {
+            await using var destinationStream = pipe.Writer.AsStream(true);
+
+            WriteImage(image, destinationStream, output);
+            await destinationStream.FlushAsync(CancellationToken.None);
+
+            await pipe.Writer.FlushAsync();
+            await pipe.Writer.CompleteAsync();
+        }
+
+        /// <summary>
+        /// Parses image size string to ImageSize, checking predefined sizes first
+        /// </summary>
+        private ImageSize ParseImageSize(string value)
         {
             if (_settings.Value.PredefinedImageSizes.TryGetValue(value.ToLowerInvariant(), out var imageSize))
             {
                 return imageSize;
             }
+
             return ImageSize.Parse(value);
         }
 
+        /// <summary>
+        /// Applies resize transformation to the image based on size and mode
+        /// </summary>
         private void ApplyResize(Image image, ImageSize size, string mode)
         {
-            var selectedMode = (mode ?? string.Empty).ToLowerInvariant() switch
+            var resizeMode = ParseResizeMode(mode);
+            var resizeOptions = new ResizeOptions
+            {
+                Size = new Size(size.Width, size.Height),
+                Mode = resizeMode
+            };
+
+            image.Mutate(x => x.Resize(resizeOptions));
+        }
+
+        /// <summary>
+        /// Parses resize mode string to ResizeMode enum
+        /// </summary>
+        private static ResizeMode ParseResizeMode(string mode)
+        {
+            return (mode ?? string.Empty).ToLowerInvariant() switch
             {
                 "boxpad" => ResizeMode.BoxPad,
                 "pad" => ResizeMode.Pad,
@@ -160,19 +193,14 @@ namespace AzureCDNImageResizer.Services
                 "stretch" => ResizeMode.Stretch,
                 _ => ResizeMode.Crop
             };
-
-            var resizeOptions = new ResizeOptions
-            {
-                Size = new Size(size.Width, size.Height),
-                Mode = selectedMode
-            };
-
-            image.Mutate(x => x.Resize(resizeOptions));
         }
 
-        private void WriteImage(Image image, Stream outputStream, string output)
+        /// <summary>
+        /// Writes image to stream in the specified output format
+        /// </summary>
+        private static void WriteImage(Image image, Stream outputStream, string output)
         {
-            switch (output)
+            switch (output?.ToLowerInvariant())
             {
                 case "jpeg":
                 case "jpg":
@@ -193,4 +221,3 @@ namespace AzureCDNImageResizer.Services
         }
     }
 }
-
