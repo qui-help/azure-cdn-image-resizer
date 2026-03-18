@@ -162,7 +162,7 @@ namespace AzureCDNImageResizer.Functions
                 "png" => "image/png",
                 "webp" => "image/webp",
                 "avif" => "image/webp",
-                "svg" => "image/svg",
+                "svg" => "image/svg+xml",
                 "mp4" => "video/mp4",
                 "mov" => "video/mov",
                 "avi" => "video/avi",
