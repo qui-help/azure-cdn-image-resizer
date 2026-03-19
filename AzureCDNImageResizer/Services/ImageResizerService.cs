@@ -35,23 +35,24 @@ namespace AzureCDNImageResizer.Services
         /// Resizes an image to specified size and format
         /// </summary>
         public async Task<Stream> ResizeAsync(string url, string containerKey, string size, string output, string mode,
-            bool isVideo = false)
+            bool isVideo = false, bool shouldProcessImage = true)
         {
             ImageSize? imageSize = isVideo ? null : ParseImageSize(size);
-            return await GetResultStreamAsync(url, containerKey, imageSize, output, mode, isVideo);
+            return await GetResultStreamAsync(url, containerKey, imageSize, output, mode, isVideo,
+                shouldProcessImage);
         }
 
         /// <summary>
         /// Retrieves the blob stream and processes it if resizing is needed
         /// </summary>
         private async Task<Stream> GetResultStreamAsync(string uri, string containerKey, ImageSize? imageSize,
-            string output, string mode, bool isVideo)
+            string output, string mode, bool isVideo, bool shouldProcessImage)
         {
             try
             {
                 var blobStream = await GetBlobStreamAsync(containerKey, uri);
 
-                if (ShouldSkipResizing(output, isVideo, imageSize))
+                if (ShouldSkipProcessing(output, isVideo, imageSize, shouldProcessImage))
                 {
                     return blobStream;
                 }
@@ -79,21 +80,22 @@ namespace AzureCDNImageResizer.Services
         }
 
         /// <summary>
-        /// Determines if image resizing should be skipped
+        /// Determines if image processing should be skipped
         /// </summary>
-        private static bool ShouldSkipResizing(string output, bool isVideo, ImageSize? imageSize)
+        private static bool ShouldSkipProcessing(string output, bool isVideo, ImageSize? imageSize,
+            bool shouldProcessImage)
         {
             if (isVideo || imageSize is null)
             {
                 return true;
             }
 
-            if (output == "svg")
+            if (!shouldProcessImage)
             {
                 return true;
             }
 
-            if (imageSize.Value.Name == ImageSize.OriginalImageSize)
+            if (output == "svg")
             {
                 return true;
             }
@@ -122,7 +124,10 @@ namespace AzureCDNImageResizer.Services
             {
                 using var image = await Image.LoadAsync(sourceStream);
 
-                ApplyResize(image, size, mode);
+                if (size.Name != ImageSize.OriginalImageSize)
+                {
+                    ApplyResize(image, size, mode);
+                }
 
                 await WriteImageToPipeAsync(image, output, pipe);
             }

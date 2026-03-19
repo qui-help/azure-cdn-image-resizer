@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Linq;
 using AzureCDNImageResizer.Extensions;
+using AzureCDNImageResizer.Models;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Headers;
 using Microsoft.AspNetCore.Mvc;
@@ -65,11 +66,14 @@ namespace AzureCDNImageResizer.Functions
 
                 var queryParams = QueryParameters.FromQuery(req.Query, url);
                 var output = ValidateAndNormalizeOutput(queryParams.Output, url);
-                var size = DetermineSize(queryParams.Size, queryParams.Width, queryParams.Height);
+                var shouldProcessImage = ShouldProcessImage(queryParams, output, url);
+                var size = shouldProcessImage && queryParams.HasResizeRequest
+                    ? DetermineSize(queryParams.Size, queryParams.Width, queryParams.Height)
+                    : ImageSize.OriginalImageSize;
                 var isVideo = IsVideoOutput(output);
 
                 var imageStream = await _imageResizerService.ResizeAsync(
-                    url, container, size, output, queryParams.Mode, isVideo);
+                    url, container, size, output, queryParams.Mode, isVideo, shouldProcessImage);
 
                 if (imageStream == null)
                 {
@@ -148,6 +152,24 @@ namespace AzureCDNImageResizer.Functions
         private static bool IsVideoOutput(string output)
         {
             return VideoOutputs.Contains(output);
+        }
+
+        /// <summary>
+        /// Determines whether the request requires image processing or can return the original blob
+        /// </summary>
+        private static bool ShouldProcessImage(QueryParameters queryParams, string output, string url)
+        {
+            if (queryParams.HasResizeRequest || queryParams.HasModeRequest)
+            {
+                return true;
+            }
+
+            if (!queryParams.HasOutputRequest)
+            {
+                return false;
+            }
+
+            return !string.Equals(output, url.ToSuffix(), StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
